@@ -183,7 +183,7 @@ class Energy(Sensor):
 
     def read_value(self, data: ProtocolResponse):
         value = read_bytes2(data)
-        return float(value) / 10 if value else None
+        return float(value) / 10
 
 
 class Energy4(Sensor):
@@ -194,7 +194,7 @@ class Energy4(Sensor):
 
     def read_value(self, data: ProtocolResponse):
         value = read_bytes4(data)
-        return float(value) / 10 if value else None
+        return float(value) / 10
 
 
 class Apparent(Sensor):
@@ -308,7 +308,7 @@ class Integer(Sensor):
         super().__init__(id_, offset, name, 2, unit, kind)
 
     def read_value(self, data: ProtocolResponse):
-        return read_bytes2(data, None, 0)
+        return read_bytes2(data)
 
     def encode_value(self, value: Any, register_value: bytes = None) -> bytes:
         return int.to_bytes(int(value), length=2, byteorder="big", signed=False)
@@ -334,7 +334,7 @@ class Long(Sensor):
         super().__init__(id_, offset, name, 4, unit, kind)
 
     def read_value(self, data: ProtocolResponse):
-        return read_bytes4(data, None, 0)
+        return read_bytes4(data)
 
     def encode_value(self, value: Any, register_value: bytes = None) -> bytes:
         return int.to_bytes(int(value), length=4, byteorder="big", signed=False)
@@ -414,7 +414,7 @@ class EnumH(Sensor):
 
 
 class EnumL(Sensor):
-    """Sensor representing label from enumeration encoded in 1 byte (low 8 bits of 16bit register)"""
+    """Sensor representing label from enumeration encoded in 1 bytes (low 8 bits of 16bit register)"""
 
     def __init__(self, id_: str, offset: int, labels: Dict, name: str, kind: Optional[SensorKind] = None):
         super().__init__(id_, offset, name, 1, "", kind)
@@ -433,7 +433,7 @@ class Enum2(Sensor):
         self._labels: Dict = labels
 
     def read_value(self, data: ProtocolResponse):
-        return self._labels.get(read_bytes2(data, None, 0))
+        return self._labels.get(read_bytes2(data))
 
 
 class EnumBitmap4(Sensor):
@@ -464,8 +464,7 @@ class EnumBitmap22(Sensor):
         raise NotImplementedError()
 
     def read(self, data: ProtocolResponse):
-        return decode_bitmap(read_bytes2(data, self.offset, 0) << 16 + read_bytes2(data, self._offsetL, 0),
-                             self._labels)
+        return decode_bitmap(read_bytes2(data, self.offset) << 16 + read_bytes2(data, self._offsetL), self._labels)
 
 
 class EnumCalculated(Sensor):
@@ -786,12 +785,12 @@ def read_byte(buffer: ProtocolResponse, offset: int = None) -> int:
     return int.from_bytes(buffer.read(1), byteorder="big", signed=True)
 
 
-def read_bytes2(buffer: ProtocolResponse, offset: int = None, undef: int = None) -> int:
+def read_bytes2(buffer: ProtocolResponse, offset: int = None) -> int:
     """Retrieve 2 byte (unsigned int) value from buffer"""
     if offset is not None:
         buffer.seek(offset)
     value = int.from_bytes(buffer.read(2), byteorder="big", signed=False)
-    return undef if value == 0xffff else value
+    return value if value != 0xffff else 0
 
 
 def read_bytes2_signed(buffer: ProtocolResponse, offset: int = None) -> int:
@@ -801,12 +800,12 @@ def read_bytes2_signed(buffer: ProtocolResponse, offset: int = None) -> int:
     return int.from_bytes(buffer.read(2), byteorder="big", signed=True)
 
 
-def read_bytes4(buffer: ProtocolResponse, offset: int = None, undef: int = None) -> int:
+def read_bytes4(buffer: ProtocolResponse, offset: int = None) -> int:
     """Retrieve 4 byte (unsigned int) value from buffer"""
     if offset is not None:
         buffer.seek(offset)
     value = int.from_bytes(buffer.read(4), byteorder="big", signed=False)
-    return undef if value == 0xffffffff else value
+    return value if value != 0xffffffff else 0
 
 
 def read_bytes4_signed(buffer: ProtocolResponse, offset: int = None) -> int:
@@ -881,12 +880,12 @@ def read_freq(buffer: ProtocolResponse, offset: int = None) -> float:
     return float(value) / 100
 
 
-def read_temp(buffer: ProtocolResponse, offset: int = None) -> float | None:
+def read_temp(buffer: ProtocolResponse, offset: int = None) -> float:
     """Retrieve temperature [C] value (2 bytes) from buffer"""
     if offset is not None:
         buffer.seek(offset)
     value = int.from_bytes(buffer.read(2), byteorder="big", signed=True)
-    if value == 32767:
+    if (value == 32767):
         return None
     else:
         return float(value) / 10

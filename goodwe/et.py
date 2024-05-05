@@ -35,10 +35,10 @@ class ET(Inverter):
         # ppv1 + ppv2 + ppv3 + ppv4
         Calculated("ppv",
                    lambda data:
-                   max(0, read_bytes4(data, 35105, 0)) +
-                   max(0, read_bytes4(data, 35109, 0)) +
-                   max(0, read_bytes4(data, 35113, 0)) +
-                   max(0, read_bytes4(data, 35117, 0)),
+                   max(0, read_bytes4(data, 35105)) +
+                   max(0, read_bytes4(data, 35109)) +
+                   max(0, read_bytes4(data, 35113)) +
+                   max(0, read_bytes4(data, 35117)),
                    "PV Power", "W", Kind.PV),
         ByteH("pv4_mode", 35119, "PV4 Mode code", "", Kind.PV),
         EnumH("pv4_mode_label", 35119, PV_MODES, "PV4 Mode", Kind.PV),
@@ -145,10 +145,10 @@ class ET(Inverter):
         # ppv1 + ppv2 + ppv3 + ppv4 + pbattery1 - active_power
         Calculated("house_consumption",
                    lambda data:
-                   read_bytes4(data, 35105, 0) +
-                   read_bytes4(data, 35109, 0) +
-                   read_bytes4(data, 35113, 0) +
-                   read_bytes4(data, 35117, 0) +
+                   read_bytes4(data, 35105) +
+                   read_bytes4(data, 35109) +
+                   read_bytes4(data, 35113) +
+                   read_bytes4(data, 35117) +
                    read_bytes4_signed(data, 35182) -
                    read_bytes2_signed(data, 35140),
                    "House Consumption", "W", Kind.AC),
@@ -331,6 +331,8 @@ class ET(Inverter):
     # Modbus registers of inverter settings, offsets are modbus register addresses
     __all_settings: Tuple[Sensor, ...] = (
         Integer("comm_address", 45127, "Communication Address", ""),
+        # FW version 23+ from
+        # Integer("modbus_baud_rate", 45132, "Modbus Baud rate", ""),
 
         Timestamp("time", 45200, "Inverter time"),
 
@@ -404,9 +406,43 @@ class ET(Inverter):
 
         Integer("dod_holding", 47602, "DoD Holding", "", Kind.BAT),
         Integer("backup_mode_enable", 47605, "Backup Mode Switch"),
-        Integer("max_charge_power", 47606, "Max Charge Power"),
-        Integer("smart_charging_enable", 47609, "Smart Charging Mode Switch"),
-        Integer("eco_mode_enable", 47612, "Eco Mode Switch"),
+        # Integer("max_charge_power", 47606, "Max Charge Power"),
+        # Integer("smart_charging_enable", 47609, "Smart Charging Mode Switch"),
+        # Integer("eco_mode_enable", 47612, "Eco Mode Switch"),
+    )
+
+    # Settings added in ARM firmware 18
+    __settings_arm_fw_18: Tuple[Sensor, ...] = (
+        # Load regulation 0: Disable, 1: Switching mode, 2: Time manage mode
+        Integer("load_regulation_index", 47595, "Load Regulation Index"),
+        # Load switch status: 0/1
+        Integer("load_switch_status", 47596, "Load Switch status"),
+        # Backup Switch SOC Min: 0/100 in percent
+        Integer("backup_switch_soc_min", 47597, "Backup Switch SOC Min."),
+        # Hardware Feed Power> 0/1
+        Integer("hardware_feed_power", 47599, "Hardware Feed Power"),
+
+        # Direct BMS communication for EMS Control
+        Integer("bms_version", 47900, "BMS Version"),
+        Integer("batt_strings", 47901, "Battery Strings"),
+        # Real time read from BMS
+        Voltage("bms_bat_charge_v_max", 47902, "BMS max. Charge Voltage limit", Kind.BMS),
+        Current("bms_bat_charge_i_max", 47903, "BMS max. Charge Current limit", Kind.BMS),
+        Voltage("bms_bat_discharge_v_min", 47904, "BMS min. Discharge Voltage limit", Kind.BMS),
+        Current("bms_bat_discharge_i_max", 47905, "BMS max. Discharge Current limit", Kind.BMS),
+        Voltage("bms_bat_voltage", 47906, "BMS Battery Voltage", Kind.BMS),
+        Current("bms_bat_current", 47907, "BMS Battery Current", Kind.BMS),
+        #
+        Integer("bms_bat_soc", 47908, "BMS Battery SOC", "%", Kind.BMS),
+        Integer("bms_bat_soh", 47909, "BMS Battery SOH", "%", Kind.BMS),
+        Temp("bms_bat_temperature", 47910, "BMS Battery Temperature", Kind.BMS),
+        Long("bms_bat_warning-code", 47911, "BMS Battery Warning Code"),
+        # Reserved
+        Long("bms_bat_alarm-code", 47913, "BMS Battery Alarm Code"),
+        Integer("bms_status", 47915, "BMS Status"),
+        Integer("bms_comm_loss_disable", 47916, "BMS Communication Loss Disable"),
+        # RW settings of BMS voltage rate
+        Integer("bms_battery_string_rate_v", 47917, "BMS Battery String Rate Voltage"),
     )
 
     def __init__(self, host: str, port: int, comm_addr: int = 0, timeout: int = 1, retries: int = 3):
@@ -458,6 +494,7 @@ class ET(Inverter):
         self.dsp_svn_version = read_unsigned_int(response, 36)
         self.arm_version = read_unsigned_int(response, 38)
         self.arm_svn_version = read_unsigned_int(response, 40)
+        # not documented
         self.firmware = self._decode(response[42:54])
         self.arm_firmware = self._decode(response[54:66])
 
@@ -467,7 +504,7 @@ class ET(Inverter):
             self._sensors = tuple(filter(lambda s: not ('pv3' in s.id_), self._sensors))
 
         if is_single_phase(self):
-            # this is single phase inverter, filter out all L2 and L3 sensors
+            # this is the single phase inverter, filter out all L2 and L3 sensors
             self._sensors = tuple(filter(self._single_phase_only, self._sensors))
             self._sensors_meter = tuple(filter(self._single_phase_only, self._sensors_meter))
 
@@ -479,6 +516,15 @@ class ET(Inverter):
             self._has_meter_extended = True
         else:
             self._sensors_meter = tuple(filter(self._not_extended_meter, self._sensors_meter))
+
+        # Check and add Load Regulation settings and Real Time BMS data added in (ETU fw 18)
+        try:
+            await self._read_from_socket(self._read_command(47595, 6))
+            self._settings.update({s.id_: s for s in self.__settings_arm_fw_18})
+        except RequestRejectedException as ex:
+            if ex.message == 'ILLEGAL DATA ADDRESS':
+                logger.debug("Cannot read Load Regulation setting, disabling it.")
+                self._has_peak_shaving = False
 
         # Check and add EcoModeV2 settings added in (ETU fw 19)
         try:
@@ -575,7 +621,7 @@ class ET(Inverter):
 
     async def _write_setting(self, setting: Sensor, value: Any):
         if setting.size_ == 1:
-            # modbus can address/store only 16 bit values, read the other 8 bytes
+            # modbus can address/store only 16-bit values, read the other 8 bytes
             response = await self._read_from_socket(self._read_command(setting.offset, 1))
             raw_value = setting.encode_value(value, response.response_data()[0:2])
         else:
@@ -666,7 +712,7 @@ class ET(Inverter):
                 raise ValueError()
 
             eco_mode: EcoMode | Sensor = self._settings.get('eco_mode_1')
-            # Load the current values to try to detect schedule type
+            # Load the current values to try to detect a schedule type
             try:
                 await self._read_setting(eco_mode)
             except ValueError:
